@@ -37,11 +37,19 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 # Config
 # ---------------------------------------------------------------------------
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-LOG_PATH    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log.json")
+# When running as a PyInstaller exe, __file__ points inside the temp
+# extraction folder. Use sys.executable's directory instead so config.json
+# is always created next to the exe (or next to main.py during development).
+if getattr(sys, 'frozen', False):
+    _BASE_DIR = os.path.dirname(sys.executable)
+else:
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+CONFIG_PATH = os.path.join(_BASE_DIR, "config.json")
+LOG_PATH    = os.path.join(_BASE_DIR, "log.json")
 
 DEFAULT_CONFIG = {
-    "monitor": 2,
+    "monitor": 1,
     "win_chance": "LOW",
     "preset_LOW":    1500,
     "preset_MEDIUM": 3500,
@@ -211,7 +219,13 @@ def get_mouse_pos():
 
 def grab():
     with mss.MSS() as sct:
-        mon  = sct.monitors[CONFIG["monitor"]]
+        idx = CONFIG["monitor"]
+        # Fall back to last available monitor if index is out of range
+        if idx >= len(sct.monitors):
+            print(f"[!] Monitor {idx} not found ({len(sct.monitors)-1} available). "
+                  f"Falling back to monitor 1. Set 'monitor' in config.json.")
+            idx = 1
+        mon  = sct.monitors[idx]
         shot = sct.grab(mon)
         return cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2BGR), mon
 
