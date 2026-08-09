@@ -8,3 +8,6 @@ Press F9 To start the script, press F10 to stop
 edit config.json to modify everything about the betting
 
 
+Dependencies:
+https://github.com/tesseract-ocr/tesseract/releases/tag/5.5.3
+Windows XD
