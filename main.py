@@ -23,6 +23,7 @@ import shutil
 import sys
 import threading
 import time
+import tkinter as tk
 from datetime import datetime, timezone
 
 import cv2
@@ -56,8 +57,11 @@ DEFAULT_CONFIG = {
 
     "start_hotkey":  "f9",
     "stop_hotkey":   "f10",
+    "pause_hotkey":  "f6",
     "debug_hotkey":  "f8",
     "coords_hotkey": "f7",   # only active during EZ Config setup, not during normal operation
+    
+    "show_overlay":  False,  # show live stats overlay (races, wagered, profit) — positioned to not interfere with OCR
 
     "bet_presets": "LOW",
     "preset_LOW":    1500,
@@ -74,6 +78,7 @@ DEFAULT_CONFIG = {
     "post_bet_delay_seconds": 1,
     "again_poll_interval_seconds": 0.5,
     "after_again_delay_seconds": 1,
+    "click_hold_seconds": 0.05,   # how long to hold the mouse button down per click. 0.05 is fine for 30+ fps. if clicks don't register (e.g. at 15 fps), raise to 0.15 or 0.20
     "click_delay_seconds": 0.15,
     "human_mouse": True,   # true = gradual bezier mouse movement with jitter; false = instant teleport
 
@@ -369,7 +374,11 @@ def click(sx, sy):
     else:
         move_to(sx, sy)
     time.sleep(0.05)
-    _send(_DN); time.sleep(0.05); _send(_UP)
+    # Hold the button down long enough to register on low-FPS systems.
+    # At 15 FPS a frame is ~67ms, so we hold for at least 2 frames (~150ms)
+    # to guarantee the game polls the input while the button is pressed.
+    hold = CONFIG.get("click_hold_seconds", 0.15)
+    _send(_DN); time.sleep(hold); _send(_UP)
     time.sleep(CONFIG["click_delay_seconds"])
 
 
@@ -955,16 +964,132 @@ def find_again(img_bgr, win):
     return None
 
 # ---------------------------------------------------------------------------
+# Live Stats Overlay
+# ---------------------------------------------------------------------------
+
+_overlay_window = None
+_overlay_thread = None
+
+
+class StatsOverlay:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.overrideredirect(True)  # Remove title bar and make non-draggable
+        self.root.attributes("-topmost", True)
+        self.root.resizable(False, False)
+        
+        # Position at very top-left corner of screen
+        self.root.geometry("240x120+0+0")
+        
+        # Dark theme
+        self.root.configure(bg="#1a1a1a")
+        
+        # Stats labels
+        self.races_label = tk.Label(self.root, text="Races: 0", 
+                                     font=("Consolas", 11, "bold"),
+                                     fg="#00ff00", bg="#1a1a1a", anchor="w")
+        self.races_label.pack(fill="x", padx=10, pady=(10, 2))
+        
+        self.wagered_label = tk.Label(self.root, text="Wagered: $0", 
+                                       font=("Consolas", 11, "bold"),
+                                       fg="#ffffff", bg="#1a1a1a", anchor="w")
+        self.wagered_label.pack(fill="x", padx=10, pady=2)
+        
+        self.profit_label = tk.Label(self.root, text="Profit: $0", 
+                                      font=("Consolas", 11, "bold"),
+                                      fg="#ffffff", bg="#1a1a1a", anchor="w")
+        self.profit_label.pack(fill="x", padx=10, pady=2)
+        
+        self.status_label = tk.Label(self.root, text="● Running", 
+                                      font=("Consolas", 9),
+                                      fg="#00ff00", bg="#1a1a1a", anchor="w")
+        self.status_label.pack(fill="x", padx=10, pady=(5, 10))
+        
+        # Update stats every 500ms
+        self.update_stats()
+        
+    def update_stats(self):
+        try:
+            self.races_label.config(text=f"Races: {_session_races}")
+            self.wagered_label.config(text=f"Wagered: ${_session_wagered:,}")
+            
+            profit = _session_profit
+            color = "#00ff00" if profit >= 0 else "#ff4444"
+            sign = "+" if profit >= 0 else ""
+            self.profit_label.config(text=f"Profit: {sign}${profit:,}", fg=color)
+            
+            if not _running:
+                self.status_label.config(text="● Stopped", fg="#ff4444")
+            elif _paused:
+                self.status_label.config(text="● Paused", fg="#ffaa00")
+            else:
+                self.status_label.config(text="● Running", fg="#00ff00")
+            
+            self.root.after(500, self.update_stats)
+        except:
+            pass  # Window closed
+            
+    def run(self):
+        self.root.mainloop()
+
+
+def _start_overlay():
+    global _overlay_window, _overlay_thread
+    if not CONFIG.get("show_overlay", False):
+        return
+    if _overlay_window is not None:
+        return
+    
+    def _overlay_worker():
+        global _overlay_window
+        try:
+            _overlay_window = StatsOverlay()
+            _overlay_window.run()
+        except:
+            pass
+        finally:
+            _overlay_window = None
+    
+    _overlay_thread = threading.Thread(target=_overlay_worker, daemon=True)
+    _overlay_thread.start()
+    print("[overlay] Stats overlay started")
+
+
+def _stop_overlay():
+    global _overlay_window
+    if _overlay_window and _overlay_window.root:
+        try:
+            _overlay_window.root.quit()
+            _overlay_window.root.destroy()
+        except:
+            pass
+        _overlay_window = None
+
+
+# ---------------------------------------------------------------------------
 # Auto-bet loop
 # ---------------------------------------------------------------------------
 
 _running = False
+_paused  = False
 _thread: threading.Thread | None = None
 
 # Session stats — reset each time start() is called
 _session_races    = 0
 _session_wagered  = 0
 _session_profit   = 0   # positive = net win, negative = net loss
+
+
+def toggle_pause():
+    global _paused
+    if not _running:
+        print("[hotkey] Not running — can't pause.")
+        return
+    _paused = not _paused
+    if _paused:
+        print(f"[hotkey] {CONFIG['pause_hotkey'].upper()} – PAUSED. Press {CONFIG['pause_hotkey'].upper()} again to resume.")
+    else:
+        print(f"[hotkey] {CONFIG['pause_hotkey'].upper()} – RESUMED.")
 
 
 def _print_stats():
@@ -989,6 +1114,9 @@ def _resolve_preset():
 def _sleep(seconds):
     end = time.time() + seconds
     while _running and time.time() < end:
+        if _paused:
+            time.sleep(0.25)
+            continue
         time.sleep(min(0.25, end - time.time()))
 
 
@@ -1008,13 +1136,17 @@ def wait_for_gta_window():
 
 
 def _loop():
-    global _running, _session_races, _session_wagered, _session_profit
+    global _running, _paused, _session_races, _session_wagered, _session_profit
     delay = CONFIG["startup_delay_seconds"]
     print(f"[loop] Starting in {delay}s…")
     _sleep(delay)
 
     cycle = 0
     while _running:
+        # Pause check at the start of each cycle
+        while _paused and _running:
+            time.sleep(0.25)
+            continue
         cycle += 1
         print(f"\n[loop] ── Cycle {cycle} ──────────────────────────────────")
 
@@ -1160,13 +1292,15 @@ def _loop():
 
 
 def start():
-    global _running, _thread, _session_races, _session_wagered, _session_profit
+    global _running, _paused, _thread, _session_races, _session_wagered, _session_profit
     if _running:
         print("[hotkey] Already running."); return
     _session_races   = 0
     _session_wagered = 0
     _session_profit  = 0
+    _paused = False
     _running = True
+    _start_overlay()
     _thread = threading.Thread(target=_loop, daemon=True)
     _thread.start()
     print(f"[hotkey] {CONFIG['start_hotkey'].upper()} – loop started.")
@@ -1178,6 +1312,7 @@ def stop():
     print(f"[hotkey] {CONFIG['stop_hotkey'].upper()} – stopping…")
     if _session_races > 0:
         _print_stats()
+    _stop_overlay()
     time.sleep(0.5)
     if CONFIG.get("close_terminal_on_stop", True):
         os._exit(0)
@@ -1274,7 +1409,7 @@ def _ez_config_wizard():
     print("  EZ CONFIG — step-by-step coordinate setup")
     print("=" * w)
     print()
-    print("  You will be guided through 5 steps.")
+    print("  You will be guided through 6 steps.")
     print(f"  For each button: hover your mouse over it in GTA,")
     print(f"  then press  {coords_key}  to save it and move to the next step.")
     print()
@@ -1323,7 +1458,7 @@ def _ez_config_wizard():
         keyboard.remove_hotkey(CONFIG.get("coords_hotkey", "f7"))
 
     # Step 5 — monitor selection
-    print(f"\n  Step 5/5 — Which monitor is GTA V running on?")
+    print(f"\n  Step 5/6 — Which monitor is GTA V running on?")
     print()
     with mss.MSS() as sct:
         monitors = sct.monitors[1:]   # skip index 0 (virtual combined desktop)
@@ -1356,6 +1491,41 @@ def _ez_config_wizard():
     with open(CONFIG_PATH, "w") as f:
         json.dump(cfg_data, f, indent=2)
     print(f"  ✓ Saved  monitor: {mon_choice}  ({monitors[mon_choice-1]['width']}x{monitors[mon_choice-1]['height']})")
+
+    # Step 6 — overlay preference
+    print(f"\n  Step 6/6 — Live Stats Overlay")
+    print()
+    print("  Show a small always-on-top window with live stats?")
+    print("  (Races, wagered, profit — positioned in top-right corner)")
+    print()
+    print("  [y]  Yes, show overlay")
+    print("  [n]  No, stats in terminal only (default)")
+    print()
+
+    overlay_choice = None
+    while overlay_choice is None:
+        try:
+            raw = input("  Enter y or n [n]: ").strip().lower()
+            if raw in ("", "n", "no"):
+                overlay_choice = False
+            elif raw in ("y", "yes"):
+                overlay_choice = True
+            else:
+                print("  Please enter 'y' or 'n'.")
+        except KeyboardInterrupt:
+            print("\n\n  Setup cancelled.")
+            sys.exit(0)
+
+    CONFIG["show_overlay"] = overlay_choice
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            cfg_data = json.load(f)
+    except Exception:
+        cfg_data = {}
+    cfg_data["show_overlay"] = overlay_choice
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(cfg_data, f, indent=2)
+    print(f"  ✓ Saved  show_overlay: {overlay_choice}")
 
     print()
     print("=" * w)
@@ -1457,16 +1627,19 @@ def main():
     print("=" * 55)
     print(f"  bet_presets : {preset}  (${amount})")
     print(f"  monitor    : {CONFIG['monitor']}")
+    print(f"  overlay    : {'ON' if CONFIG.get('show_overlay', False) else 'OFF'}")
     print(f"  logging    : {'ON → ' + LOG_PATH if CONFIG['log_all_bets'] else 'OFF'}")
     print()
     print(f"  {CONFIG['debug_hotkey'].upper():<4} Debug OCR dump")
     print(f"  {CONFIG['start_hotkey'].upper():<4} Start betting loop")
+    print(f"  {CONFIG['pause_hotkey'].upper():<4} Pause/resume loop")
     print(f"  {CONFIG['stop_hotkey'].upper():<4} Stop{' and close terminal' if CONFIG.get('close_terminal_on_stop', True) else ''}")
     print("=" * 55)
     print()
 
     keyboard.add_hotkey(CONFIG["debug_hotkey"], debug_ocr)
     keyboard.add_hotkey(CONFIG["start_hotkey"], start)
+    keyboard.add_hotkey(CONFIG["pause_hotkey"], toggle_pause)
     keyboard.add_hotkey(CONFIG["stop_hotkey"],  stop)
     keyboard.wait()
 
