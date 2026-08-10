@@ -9,7 +9,7 @@ F10 - Stop and close terminal
 Loop per cycle:
   1. Click PLACE BET
   2. Click first horse
-  3. Set bet amount to win_chance preset via > button
+  3. Set bet amount to bet_presets preset via > button
   4. Click PLACE to confirm
   5. Wait for race, poll for AGAIN, click it
   6. Repeat
@@ -58,7 +58,7 @@ DEFAULT_CONFIG = {
     "debug_hotkey":  "f8",
     "coords_hotkey": "f7",
 
-    "win_chance": "LOW",
+    "bet_presets": "LOW",
     "preset_LOW":    1500,
     "preset_MEDIUM": 3500,
     "preset_HIGH":   7500,
@@ -66,9 +66,9 @@ DEFAULT_CONFIG = {
     # win% cutoffs that decide which preset above gets used - a horse's
     # true win probability >= threshold_max uses MAX, >= threshold_high
     # uses HIGH, >= threshold_medium uses MEDIUM, anything lower uses LOW.
-    "win_chance_threshold_max":    50,
-    "win_chance_threshold_high":   40,
-    "win_chance_threshold_medium": 30,
+    "bet_presets_threshold_max":    50,
+    "bet_presets_threshold_high":   40,
+    "bet_presets_threshold_medium": 30,
 
     "startup_delay_seconds": 1,
     "after_horse_select_seconds": 1.0,
@@ -248,7 +248,7 @@ def log_bet(preset: str, amount: int, horse: dict = None):
         "preset": preset,
         "amount": amount,
         "horse_odds": (horse or {}).get("raw"),
-        "win_chance": (horse or {}).get("true_pct"),
+        "bet_presets": (horse or {}).get("true_pct"),
     }
     data = []
     if os.path.exists(LOG_PATH):
@@ -523,16 +523,16 @@ def amount_from_true_pct(true_pct: float):
     """
     Pick bet amount tier based on true win probability, using the cutoffs
     and dollar amounts from config.json:
-      >= win_chance_threshold_max    → MAX    (preset_MAX)
-      >= win_chance_threshold_high   → HIGH   (preset_HIGH)
-      >= win_chance_threshold_medium → MEDIUM (preset_MEDIUM)
+      >= bet_presets_threshold_max    → MAX    (preset_MAX)
+      >= bet_presets_threshold_high   → HIGH   (preset_HIGH)
+      >= bet_presets_threshold_medium → MEDIUM (preset_MEDIUM)
       below all of those              → LOW    (preset_LOW)
     """
-    if true_pct >= CONFIG.get("win_chance_threshold_max", 50):
+    if true_pct >= CONFIG.get("bet_presets_threshold_max", 50):
         return CONFIG.get("preset_MAX", 10000), "MAX"
-    elif true_pct >= CONFIG.get("win_chance_threshold_high", 40):
+    elif true_pct >= CONFIG.get("bet_presets_threshold_high", 40):
         return CONFIG.get("preset_HIGH", 7500), "HIGH"
-    elif true_pct >= CONFIG.get("win_chance_threshold_medium", 30):
+    elif true_pct >= CONFIG.get("bet_presets_threshold_medium", 30):
         return CONFIG.get("preset_MEDIUM", 3500), "MEDIUM"
     else:
         return CONFIG.get("preset_LOW", 1500), "LOW"
@@ -778,7 +778,7 @@ _thread: threading.Thread | None = None
 
 
 def _resolve_preset():
-    name   = CONFIG.get("win_chance", "LOW").upper()
+    name   = CONFIG.get("bet_presets", "LOW").upper()
     amount = CONFIG.get(f"preset_{name}")
     if amount is None:
         print(f"[!] Unknown preset '{name}', defaulting to LOW.")
@@ -1012,14 +1012,14 @@ def debug_ocr():
 def main():
     preset, amount = _resolve_preset()
     print("=" * 55)
-    print("  GTA V Inside Track  –  Auto Bettor")
+    print("  GTA V Inside Track Auto Bettor")
     print("=" * 55)
-    print(f"  win_chance : {preset}  (${amount})")
+    print(f"  bet_presets : {preset}  (${amount})")
     print(f"  monitor    : {CONFIG['monitor']}")
     print(f"  logging    : {'ON → ' + LOG_PATH if CONFIG['log_all_bets'] else 'OFF'}")
     print()
-    print(f"  {CONFIG['coords_hotkey'].upper():<4} Coord finder (hover UI element, press it)")
-    print(f"  {CONFIG['debug_hotkey'].upper():<4} Debug OCR dump")
+    print(f"  {CONFIG['coords_hotkey'].upper():<4} Coord finder great for making configs")
+    print(f"  {CONFIG['debug_hotkey'].upper():<4} Debug OCR dump [REALLY ONLY FOR DEVELOPERS LIKE ME]")
     print(f"  {CONFIG['start_hotkey'].upper():<4} Start betting loop")
     print(f"  {CONFIG['stop_hotkey'].upper():<4} Stop{' and close terminal' if CONFIG.get('close_terminal_on_stop', True) else ''}")
     print("=" * 55)
