@@ -48,7 +48,8 @@ CONFIG_PATH = os.path.join(_BASE_DIR, "config.json")
 LOG_PATH    = os.path.join(_BASE_DIR, "log.json")
 
 DEFAULT_CONFIG = {
-    "monitor": 1,   # unused now - capture is based on the GTA window itself, not a monitor. Kept so old configs still load.
+    "monitor": 1,   # which monitor GTA is on — set automatically by EZ Config (step 5)
+    "monitor_configured": False,   # set to true once EZ Config step 5 has been completed
 
     "game_window_title": "Grand Theft Auto V",   # also substring-matched as a fallback, in case the exact title differs
     "tesseract_path": r"C:\Program Files\Tesseract-OCR\tesseract.exe",
@@ -56,16 +57,14 @@ DEFAULT_CONFIG = {
     "start_hotkey":  "f9",
     "stop_hotkey":   "f10",
     "debug_hotkey":  "f8",
-    "coords_hotkey": "f7",
+    "coords_hotkey": "f7",   # only active during EZ Config setup, not during normal operation
 
     "bet_presets": "LOW",
     "preset_LOW":    1500,
     "preset_MEDIUM": 3500,
     "preset_HIGH":   7500,
     "preset_MAX":    10000,
-    # win% cutoffs that decide which preset above gets used - a horse's
-    # true win probability >= threshold_max uses MAX, >= threshold_high
-    # uses HIGH, >= threshold_medium uses MEDIUM, anything lower uses LOW.
+    # win% cutoffs that decide which preset above gets used
     "bet_presets_threshold_max":    50,
     "bet_presets_threshold_high":   40,
     "bet_presets_threshold_medium": 30,
@@ -76,46 +75,57 @@ DEFAULT_CONFIG = {
     "again_poll_interval_seconds": 0.5,
     "after_again_delay_seconds": 1,
     "click_delay_seconds": 0.15,
+    "human_mouse": True,   # true = gradual bezier mouse movement with jitter; false = instant teleport
 
     # Retry behavior for each step of the loop
-    "place_bet_retry_attempts": 10,              # attempts to find+click PLACE BET entering the horse screen
+    "place_bet_retry_attempts": 10,
     "place_bet_retry_delay_seconds": 0.75,
-    "horse_select_retry_attempts": 15,           # attempts to find a horse to click
+    "horse_select_retry_attempts": 15,
     "horse_select_retry_delay_seconds": 1.0,
-    "horse_not_found_retry_delay_seconds": 2.0,  # extra pause before retrying the whole cycle if no horse is ever found
-    "place_confirm_retry_attempts": 10,          # attempts to find+click PLACE to confirm the bet
+    "horse_not_found_retry_delay_seconds": 2.0,
+    "place_confirm_retry_attempts": 10,
     "place_confirm_retry_delay_seconds": 1.0,
-    "verify_delay_seconds": 0.35,                # pause before re-checking the screen after a click (horse-screen load, AGAIN dismissal)
+    "verify_delay_seconds": 0.5,                # how often to re-check for the horse screen after a PLACE BET click
+    "verify_horse_screen_timeout_seconds": 3.0, # total time to wait for the horse screen to load before retrying
 
-    # Every coordinate below is relative to the GTA window's client area
-    # top-left corner (not a monitor) - so they keep working regardless of
-    # which monitor the game is on or where the window sits. Still needs
-    # recalibrating (coords_hotkey) if the game's resolution/aspect changes.
+    # ALL coordinates below are ABSOLUTE screen coordinates.
+    # They default to null — run the script once to see the setup wizard,
+    # which explains exactly how to get each value using F7.
+    # Re-calibrate any time you move GTA to a different monitor or change resolution.
 
-    # Coords of the > increase button on the bet screen.
-    # Default values are for 1920x1080 GTA — use coords_hotkey to recalibrate if different.
-    "increase_button_x": 2883,
-    "increase_button_y": 985,
-    # Coords of the bet amount number (the $100 display) on the bet screen.
-    "bet_amount_x": 1319,
-    "bet_amount_y": 518,
-    "bet_amount_crop_width": 100,   # half-width of the OCR crop box around bet_amount_x/y (total box width = 2x this)
-    "bet_amount_crop_height": 25,   # half-height of the OCR crop box
-    # Fallback coords for the PLACE BET button if OCR can't find it.
-    # Default is for 1920x1080 — use coords_hotkey to recalibrate.
-    "place_button_x": 1302,
-    "place_button_y": 776,
-    "bet_amount_region": None,
+    # Absolute screen coords of the > (increase) button on the bet screen.
+    "increase_button_x": None,
+    "increase_button_y": None,
+
+    # Absolute screen coords of the bet amount display (used only by debug OCR).
+    "bet_amount_x": None,
+    "bet_amount_y": None,
+    "bet_amount_crop_width": 100,
+    "bet_amount_crop_height": 25,
+
+    # Absolute screen coords — the PLACE BET button on the main Inside Track
+    # screen that you click to ENTER the horse selection screen.
+    # Use F7 while hovering over it to get these coords.
+    "place_bet_enter_x": None,
+    "place_bet_enter_y": None,
+
+    # Absolute screen coords — the PLACE confirm button you click AFTER
+    # selecting a horse to confirm and submit the bet.
+    # Fallback only — OCR tries to find it first.
+    "place_button_x": None,
+    "place_button_y": None,
+
     "bet_click_cooldown": 0.2,
     "max_bet_adjust_attempts": 120,
+
     "odds_click_x_offset": 0,
     "odds_click_y_offset": 0,
     "confidence_threshold": 40,
-    "horse_row_confidence_offset": 20,   # how much lower than confidence_threshold to accept for the horse-name-row fallback
-    "window_wait_poll_seconds": 2,       # how often to re-check for the GTA window while waiting for it to appear
+    "horse_row_confidence_offset": 20,
+    "window_wait_poll_seconds": 2,
 
     "log_all_bets": False,
-    "close_terminal_on_stop": True   # set false to keep the window open after F10 - loop stops, but you can press start_hotkey again
+    "close_terminal_on_stop": True
 }
 
 
@@ -300,14 +310,65 @@ def _send(flags, dx=0, dy=0):
 
 
 def move_to(sx, sy):
+    """Instantly warp the cursor to (sx, sy) in absolute screen coords."""
     vx, vy, vw, vh = _virt()
     _send(_MOVE | _ABS | _VDESK,
           int((sx - vx) * 65535 / max(vw-1, 1)),
           int((sy - vy) * 65535 / max(vh-1, 1)))
 
 
+def _human_move_to(tx, ty):
+    """
+    Move the cursor from its current position to (tx, ty) along a
+    quadratic Bezier curve with small per-step random jitter — mimics
+    natural, slightly-wobbly human wrist movement.
+
+    Speed is randomised (0.18 – 0.30 s total travel time) and step count
+    scales with distance so fast short moves still feel snappy.
+    """
+    import random, math
+    cx, cy = get_mouse_pos()
+
+    dist = math.hypot(tx - cx, ty - cy)
+    if dist < 2:          # already there
+        return
+
+    # Random control point offset (pulls the path into a gentle arc)
+    steps = max(12, int(dist / 18))
+    travel_time = random.uniform(0.18, 0.30)
+    delay = travel_time / steps
+
+    # Bezier control point — perpendicular offset up to ±15 % of distance
+    perp_mag = random.uniform(-0.15, 0.15) * dist
+    mx, my = (cx + tx) / 2, (cy + ty) / 2
+    # Perpendicular direction
+    dx, dy = tx - cx, ty - cy
+    length = math.hypot(dx, dy) or 1
+    px, py = -dy / length, dx / length
+    cpx, cpy = mx + px * perp_mag, my + py * perp_mag
+
+    for i in range(1, steps + 1):
+        t = i / steps
+        # Quadratic Bezier
+        bx = (1-t)**2 * cx + 2*(1-t)*t * cpx + t**2 * tx
+        by = (1-t)**2 * cy + 2*(1-t)*t * cpy + t**2 * ty
+        # Small random jitter (±1–2 px), tapers off near destination
+        jitter_scale = 1.0 - t * 0.7
+        jx = random.uniform(-2, 2) * jitter_scale
+        jy = random.uniform(-2, 2) * jitter_scale
+        move_to(int(bx + jx), int(by + jy))
+        time.sleep(delay)
+
+    # Final snap to exact target with no jitter
+    move_to(tx, ty)
+
+
 def click(sx, sy):
-    move_to(sx, sy); time.sleep(0.1)
+    if CONFIG.get("human_mouse", True):
+        _human_move_to(sx, sy)
+    else:
+        move_to(sx, sy)
+    time.sleep(0.05)
     _send(_DN); time.sleep(0.05); _send(_UP)
     time.sleep(CONFIG["click_delay_seconds"])
 
@@ -322,14 +383,45 @@ def get_mouse_pos():
 # ---------------------------------------------------------------------------
 
 def grab():
-    """Returns (image, rect) for the GTA window's client area, or (None, None)
-    if the window isn't found. Callers must handle the None case."""
+    """Capture the full virtual desktop (all monitors combined).
+    Returns (image_bgr, monitor_dict) or (None, None) on failure.
+    Used when we need absolute-coord screen captures."""
+    try:
+        with mss.MSS() as sct:
+            mon = sct.monitors[0]
+            shot = sct.grab(mon)
+            return cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2BGR), mon
+    except Exception as e:
+        print(f"[grab] Screen capture failed: {e}")
+        return None, None
+
+
+def grab_gta():
+    """Capture only the GTA window client area.
+
+    Returns (image_bgr, win_rect) where win_rect is
+    {"left","top","width","height"} in absolute screen coords.
+
+    OCR pixel positions from this image are WINDOW-relative (0,0 = top-left
+    of the game). To get an absolute screen coord for clicking, add
+    win_rect["left"] / win_rect["top"] back.
+
+    Using a tight crop means Tesseract only sees the game UI — no taskbar,
+    second monitor, or other desktop noise — which makes OCR far more
+    reliable for horse name/odds detection.
+
+    Returns (None, None) if the window can't be found.
+    """
     win = get_gta_window_rect()
     if win is None:
         return None, None
-    with mss.MSS() as sct:
-        shot = sct.grab(win)
-        return cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2BGR), win
+    try:
+        with mss.MSS() as sct:
+            shot = sct.grab(win)
+            return cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2BGR), win
+    except Exception as e:
+        print(f"[grab_gta] Capture failed: {e}")
+        return None, None
 
 # ---------------------------------------------------------------------------
 # GTA window focus
@@ -538,80 +630,181 @@ def amount_from_true_pct(true_pct: float):
         return CONFIG.get("preset_LOW", 1500), "LOW"
 
 
-def click_best_horse(img_bgr, mon):
+def _ocr_row_band(img_bgr, cy, band_h=30):
+    """
+    Crop a horizontal band around cy and run OCR looking for odds tokens.
+    Returns a list of parsed odds dicts found in that band (window-relative coords).
+    """
+    h, w = img_bgr.shape[:2]
+    y1 = max(0, cy - band_h)
+    y2 = min(h, cy + band_h)
+    band = img_bgr[y1:y2, :]
+    tokens = []
+    seen = set()
+    for pre in (False, True):
+        data, scale = _ocr_data(band, preprocess=pre)
+        for i, word in enumerate(data["text"]):
+            raw = word.strip()
+            if not raw:
+                continue
+            parsed = _parse_odds(raw)
+            if parsed is None:
+                continue
+            conf = int(float(data["conf"][i])) if data["conf"][i] not in ("", "-1") else -1
+            if conf < 0:
+                continue
+            x  = data["left"][i]  // scale
+            y  = data["top"][i]   // scale
+            tw = data["width"][i] // scale
+            th = data["height"][i]// scale
+            key = (x // 20,)
+            if key in seen:
+                continue
+            seen.add(key)
+            tokens.append({
+                "raw": raw, "odds": parsed,
+                "cx": x + tw // 2,
+                "cy": y1 + y + th // 2,   # offset back to window coords
+                "conf": conf,
+            })
+    return tokens
+
+
+def click_best_horse(img_bgr, win):
     """
     Find all horses on screen, pick the one with the best true win %,
-    click it, and return (token, true_pct). Falls back to row detection.
+    click it, and return the token dict. Falls back to row detection.
+
+    img_bgr is a GTA-window crop (from grab_gta). OCR pixel coords are
+    window-relative — add win["left"]/win["top"] to get absolute click coords.
+
+    Strategy:
+      1. Try full-screen odds OCR (fast when GTA's font cooperates).
+      2. If that gets < 2 tokens, detect horse name rows, then scan each
+         row's horizontal band for odds individually (more reliable on
+         GTA's stylised font).
+      3. If we still have odds for at least 2 horses, pick the best by
+         true win %.
+      4. Last resort: click the first row (topmost horse).
     """
+    # --- Pass 1: full-screen odds scan ---
     tokens = find_horse_tokens(img_bgr)
+
+    # --- Pass 2: row-band scan if full-screen got too few ---
+    if len(tokens) < 2:
+        rows = find_horse_rows(img_bgr)
+        if rows:
+            band_tokens = []
+            for rx, ry in rows:
+                found = _ocr_row_band(img_bgr, ry)
+                if found:
+                    # take the rightmost token on this row (odds sit to the right)
+                    best = max(found, key=lambda t: t["cx"])
+                    best["row_cx"] = rx   # store the horse-name click x
+                    best["row_cy"] = ry
+                    band_tokens.append(best)
+            if len(band_tokens) >= 2:
+                tokens = band_tokens
+                print(f"[horse] Row-band scan found {len(tokens)} odds tokens")
+            elif rows:
+                # Still nothing useful — log and fall through to row fallback
+                print(f"[horse] Odds OCR failed on all {len(rows)} row bands")
+
+    # --- Pick best from whatever tokens we have ---
     if len(tokens) >= 2:
         best_i, true_pct = pick_best_horse(tokens)
         chosen = tokens[best_i]
-        sx = mon["left"] + chosen["cx"] + CONFIG["odds_click_x_offset"]
-        sy = mon["top"]  + chosen["cy"] + CONFIG["odds_click_y_offset"]
+        # Prefer the horse-name click position if row-band scan provided it
+        click_x = chosen.get("row_cx", chosen["cx"])
+        click_y = chosen.get("row_cy", chosen["cy"])
+        sx = win["left"] + click_x + CONFIG["odds_click_x_offset"]
+        sy = win["top"]  + click_y + CONFIG["odds_click_y_offset"]
         print(f"[horse] Clicking best horse {chosen['raw']} at ({sx},{sy})")
         focus_gta(); click(sx, sy)
         chosen["true_pct"] = true_pct
         return chosen
     elif len(tokens) == 1:
         chosen = tokens[0]
-        sx = mon["left"] + chosen["cx"] + CONFIG["odds_click_x_offset"]
-        sy = mon["top"]  + chosen["cy"] + CONFIG["odds_click_y_offset"]
+        click_x = chosen.get("row_cx", chosen["cx"])
+        click_y = chosen.get("row_cy", chosen["cy"])
+        sx = win["left"] + click_x + CONFIG["odds_click_x_offset"]
+        sy = win["top"]  + click_y + CONFIG["odds_click_y_offset"]
         print(f"[horse] Only one odds found ({chosen['raw']}), clicking at ({sx},{sy})")
         focus_gta(); click(sx, sy)
         chosen["true_pct"] = 0
         return chosen
 
-    # Fall back: find horse rows by name text
-    # Need at least 4 rows — if fewer, screen hasn't loaded yet
+    # --- Last resort: click topmost horse row ---
     rows = find_horse_rows(img_bgr)
     if len(rows) < 4:
         print(f"[horse] Only {len(rows)} rows found — screen still loading.")
         return None
 
-    # Just pick the first (topmost) horse row
     rx, ry = rows[0]
-    sx = mon["left"] + rx + CONFIG["odds_click_x_offset"]
-    sy = mon["top"]  + ry + CONFIG["odds_click_y_offset"]
+    sx = win["left"] + rx + CONFIG["odds_click_x_offset"]
+    sy = win["top"]  + ry + CONFIG["odds_click_y_offset"]
     print(f"[horse] Clicking first horse row at ({sx},{sy})  [{len(rows)} rows found]")
     focus_gta(); click(sx, sy)
     return {"raw": "row", "odds": None, "cx": rx, "cy": ry, "conf": -1, "true_pct": 0}
 
 # ---------------------------------------------------------------------------
-# PLACE button
+# PLACE BET — enter betting screen (main Inside Track screen button)
 # ---------------------------------------------------------------------------
 
-def click_place(img_bgr, mon):
+def click_place_bet_enter():
     """
-    Click the PLACE BET button once.
+    Click the PLACE BET button on the main Inside Track screen to open
+    the horse-selection screen.  Uses place_bet_enter_x/y from config —
+    no OCR needed since this is a fixed, user-calibrated coord.
+    """
+    px = CONFIG.get("place_bet_enter_x")
+    py = CONFIG.get("place_bet_enter_y")
+    if px is None or py is None:
+        print("[bet] place_bet_enter_x/y not set — use F7 to calibrate.")
+        return False
+    print(f"[bet] Clicking PLACE BET (enter) at ({px},{py})")
+    focus_gta()
+    click(int(px), int(py))
+    return True
 
-    OCR can sometimes return only the word PLACE even though the actual
-    clickable control is the larger PLACE BET button.  Prefer the center of
-    the whole PLACE/BET text when both words are detected, otherwise use
-    the PLACE word center.  The caller is responsible for retrying if the
-    screen did not change.
+
+# ---------------------------------------------------------------------------
+# PLACE button — confirm bet after horse selection
+# ---------------------------------------------------------------------------
+
+def click_place(img_bgr, win):
     """
+    Click the PLACE confirm button (after horse selection).
+
+    If place_button_x/y are set in config, uses them directly — reliable
+    and instant. Falls back to OCR only if the coord isn't configured.
+    """
+    # Prefer the calibrated coord — OCR often picks up false matches from
+    # other PLACE/BET text still visible on screen.
+    px = CONFIG.get("place_button_x")
+    py = CONFIG.get("place_button_y")
+    if px is not None and py is not None:
+        print(f"[bet] Clicking PLACE confirm at ({px},{py})")
+        focus_gta(); click(int(px), int(py))
+        return True
+
+    # Fallback: OCR scan (only reached if place_button_x/y not set)
     thresh = CONFIG["confidence_threshold"]
     data, scale = _ocr_data(img_bgr)
-
     place = None
-    bet = None
-
+    bet   = None
     for i, word in enumerate(data["text"]):
         wrd = word.strip().upper()
         if wrd not in ("PLACE", "BET"):
             continue
-
         conf = int(float(data["conf"][i])) if data["conf"][i] not in ("", "-1") else -1
         if conf < thresh:
             continue
-
-        x  = data["left"][i] // scale
-        y  = data["top"][i] // scale
+        x  = data["left"][i]  // scale
+        y  = data["top"][i]   // scale
         tw = data["width"][i] // scale
-        th = data["height"][i] // scale
+        th = data["height"][i]// scale
         box = (x, y, x + tw, y + th, conf)
-
         if wrd == "PLACE":
             place = box
         elif wrd == "BET":
@@ -619,64 +812,73 @@ def click_place(img_bgr, mon):
 
     if place:
         if bet:
-            # Only combine BET when it is on roughly the same row as PLACE.
-            pcx = (place[0] + place[2]) // 2
             pcy = (place[1] + place[3]) // 2
-            bcx = (bet[0] + bet[2]) // 2
-            bcy = (bet[1] + bet[3]) // 2
-
+            bcy = (bet[1]   + bet[3])   // 2
             if abs(pcy - bcy) <= max(place[3] - place[1], bet[3] - bet[1]) * 2:
                 cx = (min(place[0], bet[0]) + max(place[2], bet[2])) // 2
                 cy = (min(place[1], bet[1]) + max(place[3], bet[3])) // 2
-                conf = min(place[4], bet[4])
-                sx, sy = mon["left"] + cx, mon["top"] + cy
-                print(f"[bet] Clicking PLACE BET center at ({sx},{sy})  conf={conf}")
-                focus_gta()
-                click(sx, sy)
+                sx, sy = win["left"] + cx, win["top"] + cy
+                print(f"[bet] Clicking PLACE BET (OCR) at ({sx},{sy})  conf={min(place[4],bet[4])}")
+                focus_gta(); click(sx, sy)
                 return True
-
         cx = (place[0] + place[2]) // 2
         cy = (place[1] + place[3]) // 2
-        sx, sy = mon["left"] + cx, mon["top"] + cy
-        print(f"[bet] Clicking PLACE at ({sx},{sy})  conf={place[4]}")
-        focus_gta()
-        click(sx, sy)
+        sx, sy = win["left"] + cx, win["top"] + cy
+        print(f"[bet] Clicking PLACE (OCR) at ({sx},{sy})  conf={place[4]}")
+        focus_gta(); click(sx, sy)
         return True
 
-    px = CONFIG.get("place_button_x")
-    py = CONFIG.get("place_button_y")
-    if px is not None and py is not None:
-        sx, sy = mon["left"] + px, mon["top"] + py
-        print(f"[bet] PLACE OCR miss — using fallback coords ({sx},{sy})")
-        focus_gta()
-        click(sx, sy)
-        return True
-
-    print("[bet] PLACE button not found and no fallback coords set.")
+    print("[bet] PLACE button not found — set place_button_x/y in config.json.")
     return False
 
 # ---------------------------------------------------------------------------
-# Bet amount — find > button, read amount from a TIGHT crop just left of it
+# Bet amount — time-based hold-click on the > button
+#
+# Measured anchor points (hold duration to reach each amount from $100):
+#   $1,500  →  3.5 s
+#   $7,500  →  6.5 s
+#   $10,000 → 13.5 s
+#
+# Durations for intermediate targets are linearly interpolated between the
+# two nearest anchors.  The hold is capped at the interpolated time so the
+# bet never overshoots or keeps clicking indefinitely.
 # ---------------------------------------------------------------------------
 
-def _find_increase_button(img_bgr):
-    """OCR scan for > button. Returns image-relative (cx, cy) or None."""
-    data, scale = _ocr_data(img_bgr)
-    for i, word in enumerate(data["text"]):
-        if word.strip() not in (">", "»", "›"):
-            continue
-        conf = int(float(data["conf"][i])) if data["conf"][i] not in ("", "-1") else -1
-        if conf < CONFIG["confidence_threshold"]:
-            continue
-        x  = data["left"][i]  // scale; y  = data["top"][i]   // scale
-        tw = data["width"][i] // scale; th = data["height"][i]// scale
-        return x + tw//2, y + th//2
-    return None
+_BET_ANCHORS = [
+    (100,   0.0),   # starting value — no hold needed
+    (1500,  3.5),
+    (7500,  6.5),
+    (10000, 13.5),
+]
+
+
+def _hold_duration_for(target: int) -> float:
+    """
+    Return how many seconds to hold the > button to reach `target` from $100.
+    Linearly interpolates between the measured anchor points above.
+    """
+    # Clamp to the table range
+    if target <= _BET_ANCHORS[0][0]:
+        return 0.0
+    if target >= _BET_ANCHORS[-1][0]:
+        return _BET_ANCHORS[-1][1]
+
+    for i in range(len(_BET_ANCHORS) - 1):
+        lo_amt, lo_t = _BET_ANCHORS[i]
+        hi_amt, hi_t = _BET_ANCHORS[i + 1]
+        if lo_amt <= target <= hi_amt:
+            frac = (target - lo_amt) / (hi_amt - lo_amt)
+            return lo_t + frac * (hi_t - lo_t)
+
+    return _BET_ANCHORS[-1][1]
 
 
 def hold_click(sx, sy, duration):
-    move_to(sx, sy)
-    time.sleep(0.1)
+    if CONFIG.get("human_mouse", True):
+        _human_move_to(sx, sy)
+    else:
+        move_to(sx, sy)
+    time.sleep(0.05)
     _send(_DN)
     time.sleep(duration)
     _send(_UP)
@@ -684,78 +886,61 @@ def hold_click(sx, sy, duration):
 
 def set_bet_amount(target: int) -> bool:
     """
-    Click > and keep reading the on-screen number until it hits target.
-    Reads the number from a tight crop just left of the > button.
-    Stops as soon as the value meets or exceeds target.
+    Hold the > button for the pre-calculated duration that corresponds to
+    `target`, then release.  No OCR loop — timing is derived from measured
+    anchor points so the bet lands at (or very close to) the target amount.
+
+    The GTA bet counter always resets to $100 when the screen opens, so
+    we always hold from zero.
     """
     bx = CONFIG.get("increase_button_x")
     by = CONFIG.get("increase_button_y")
     if bx is None or by is None:
         print("[bet] increase_button_x/y not set — use F7 to calibrate.")
-        return True
-
-    win = get_gta_window_rect()
-    if win is None:
-        print("[bet] GTA window not found - can't set bet amount.")
         return False
-    abs_x = win["left"] + bx
-    abs_y = win["top"]  + by
 
-    # The bet amount number is at window-relative ~(1319, 518) on a 1920x1080
-    # game resolution. Use bet_amount_region from config if set, otherwise
-    # use a fixed crop around the known position.
-    amt_x = CONFIG.get("bet_amount_x", 1319)
-    amt_y = CONFIG.get("bet_amount_y", 518)
+    # increase_button_x/y are absolute screen coords
+    abs_x, abs_y = int(bx), int(by)
 
-    def read_amount():
-        img, _ = grab()
-        cw = CONFIG.get("bet_amount_crop_width", 100)
-        ch = CONFIG.get("bet_amount_crop_height", 25)
-        x1 = max(0, amt_x - cw)
-        x2 = amt_x + cw
-        y1 = max(0, amt_y - ch)
-        y2 = amt_y + ch
-        val = _ocr_digits(img[y1:y2, x1:x2])
-        # Ignore anything above the max possible bet — it's the payout number
-        max_bet = CONFIG.get("preset_MAX", 10000)
-        if val is not None and val > max_bet:
-            return None
-        return val
+    duration = _hold_duration_for(target)
+    print(f"[bet] Holding > for {duration:.2f}s to reach ${target:,}")
 
-    current = read_amount()
-    if current is None:
-        print("[bet] Couldn't read bet amount — clicking anyway.")
-        current = 100  # assume default
+    focus_gta()
+    hold_click(abs_x, abs_y, duration)
 
-    if current >= target:
-        print(f"[bet] Already at ${current}, target ${target}.")
-        return True
-
-    print(f"[bet] ${current} → ${target}…")
-    cooldown = CONFIG.get("bet_click_cooldown", 0.2)
-    cap = CONFIG.get("max_bet_adjust_attempts", 120)
-    attempts = 0
-
-    while attempts < cap:
-        click(abs_x, abs_y)
-        attempts += 1
-        time.sleep(cooldown)
-
-        val = read_amount()
-        if val is not None:
-            current = val
-            if current >= target:
-                print(f"[bet] Reached ${current}.")
-                return True
-
-    print(f"[bet] Stopped at ${current} after {attempts} attempts.")
+    print(f"[bet] Hold released — bet should be ~${target:,}")
     return True
 
 # ---------------------------------------------------------------------------
 # AGAIN button
 # ---------------------------------------------------------------------------
 
-def find_again(img_bgr, mon):
+def _read_payout(img_bgr):
+    """
+    Try to OCR a dollar payout amount from the race results screen.
+    GTA displays the winnings as a large "$X,XXX" or "$XX,XXX" number.
+    Returns the integer payout, or None if nothing reliable is found.
+    """
+    data, scale = _ocr_data(img_bgr)
+    candidates = []
+    for i, word in enumerate(data["text"]):
+        raw = word.strip().replace(",", "").replace("$", "")
+        if not raw.isdigit():
+            continue
+        val = int(raw)
+        if val < 100 or val > 500000:
+            continue
+        conf = int(float(data["conf"][i])) if data["conf"][i] not in ("", "-1") else -1
+        if conf < CONFIG["confidence_threshold"]:
+            continue
+        candidates.append(val)
+    if not candidates:
+        return None
+    return max(candidates)   # largest number on screen = payout
+
+
+def find_again(img_bgr, win):
+    """img_bgr is a GTA-window crop — add win offsets to get absolute coords."""
     data, scale = _ocr_data(img_bgr)
     thresh = CONFIG["confidence_threshold"]
     for i, word in enumerate(data["text"]):
@@ -766,7 +951,7 @@ def find_again(img_bgr, mon):
             continue
         x  = data["left"][i]  // scale; y  = data["top"][i]   // scale
         tw = data["width"][i] // scale; th = data["height"][i]// scale
-        return mon["left"] + x + tw//2, mon["top"] + y + th//2
+        return win["left"] + x + tw//2, win["top"] + y + th//2
     return None
 
 # ---------------------------------------------------------------------------
@@ -775,6 +960,21 @@ def find_again(img_bgr, mon):
 
 _running = False
 _thread: threading.Thread | None = None
+
+# Session stats — reset each time start() is called
+_session_races    = 0
+_session_wagered  = 0
+_session_profit   = 0   # positive = net win, negative = net loss
+
+
+def _print_stats():
+    net = _session_profit
+    sign = "+" if net >= 0 else ""
+    print(f"\n  ┌─ Session ────────────────────────────────")
+    print(f"  │  Races     : {_session_races}")
+    print(f"  │  Wagered   : ${_session_wagered:,}")
+    print(f"  │  Net P/L   : {sign}${net:,}")
+    print(f"  └──────────────────────────────────────────\n")
 
 
 def _resolve_preset():
@@ -808,7 +1008,7 @@ def wait_for_gta_window():
 
 
 def _loop():
-    global _running
+    global _running, _session_races, _session_wagered, _session_profit
     delay = CONFIG["startup_delay_seconds"]
     print(f"[loop] Starting in {delay}s…")
     _sleep(delay)
@@ -819,29 +1019,34 @@ def _loop():
         print(f"\n[loop] ── Cycle {cycle} ──────────────────────────────────")
 
         # Step 1: Click PLACE BET to enter the horse-select screen.
-        # Do not assume the click worked just because OCR found the button:
-        # verify that the horse-select UI appears before continuing.
+        # After clicking, poll for the horse-select UI to appear (up to
+        # verify_horse_screen_timeout_seconds). GTA's screen transition
+        # takes a variable amount of time, so a single short check isn't
+        # reliable — we keep checking until horses appear or we give up.
         entered_horse_screen = False
 
         for attempt in range(CONFIG["place_bet_retry_attempts"]):
-            img, mon = grab()
+            if click_place_bet_enter():
+                print(f"[loop] PLACE BET click sent — waiting for horse screen…")
 
-            if click_place(img, mon):
-                print(f"[loop] PLACE BET click sent — verifying horse screen…")
+                timeout  = CONFIG.get("verify_horse_screen_timeout_seconds", 3.0)
+                poll     = CONFIG.get("verify_delay_seconds", 0.5)
+                deadline = time.time() + timeout
+                while _running and time.time() < deadline:
+                    time.sleep(poll)
+                    verify_img, verify_win = grab_gta()
+                    if verify_img is None: continue
+                    tokens = find_horse_tokens(verify_img)
+                    rows   = find_horse_rows(verify_img)
+                    if len(tokens) >= 1 or len(rows) >= 4:
+                        print("[loop] Horse screen confirmed — proceeding.")
+                        entered_horse_screen = True
+                        break
 
-                # Give the UI a moment to react, then check for horse odds/rows.
-                _sleep(CONFIG["verify_delay_seconds"])
-                verify_img, verify_mon = grab()
-
-                tokens = find_horse_tokens(verify_img)
-                rows = find_horse_rows(verify_img)
-
-                if len(tokens) >= 1 or len(rows) >= 4:
-                    print("[loop] PLACE BET click confirmed — horse screen loaded.")
-                    entered_horse_screen = True
+                if entered_horse_screen:
                     break
 
-                print("[loop] PLACE BET click did not change the screen — retrying…")
+                print("[loop] Horse screen didn't load in time — retrying PLACE BET…")
             else:
                 print(f"[loop] PLACE BET not found (attempt {attempt+1}/{CONFIG['place_bet_retry_attempts']})…")
 
@@ -857,8 +1062,10 @@ def _loop():
         # Step 2: Click best horse (by true win probability)
         horse = None
         for attempt in range(CONFIG["horse_select_retry_attempts"]):
-            img, mon = grab()
-            horse = click_best_horse(img, mon)
+            img, win = grab_gta()
+            if img is None:
+                _sleep(CONFIG["horse_select_retry_delay_seconds"]); continue
+            horse = click_best_horse(img, win)
             if horse: break
             print(f"[loop] No horse yet (attempt {attempt+1}/{CONFIG['horse_select_retry_attempts']}), "
                   f"retrying in {CONFIG['horse_select_retry_delay_seconds']}s…")
@@ -881,9 +1088,12 @@ def _loop():
         # Step 4: Click PLACE to confirm bet
         placed = False
         for attempt in range(CONFIG["place_confirm_retry_attempts"]):
-            img, mon = grab()
-            if click_place(img, mon):
+            img, win = grab_gta()
+            if img is None:
+                _sleep(CONFIG["place_confirm_retry_delay_seconds"]); continue
+            if click_place(img, win):
                 log_bet(preset, amount, horse)
+                _session_wagered += amount
                 placed = True
                 break
             print(f"[loop] PLACE not found (attempt {attempt+1}/{CONFIG['place_confirm_retry_attempts']}), "
@@ -902,43 +1112,60 @@ def _loop():
         # Step 6: Poll for AGAIN and click it
         interval = CONFIG["again_poll_interval_seconds"]
         print(f"[loop] Watching for AGAIN…")
+        payout = None
         while _running:
-            img, mon = grab()
-            pos = find_again(img, mon)
+            img, win = grab_gta()
+            if img is None:
+                time.sleep(interval); continue
+            pos = find_again(img, win)
             if pos is None:
                 time.sleep(interval); continue
+
+            # Try to read the payout before dismissing the screen
+            payout = _read_payout(img)
             sx, sy = pos
             print(f"[loop] AGAIN at ({sx},{sy}) — clicking once…")
             focus_gta(); click(sx, sy)
 
-            # Verify the click actually dismissed AGAIN. If it is still visible,
-            # retry with one additional click instead of doing a 3-click burst.
             time.sleep(CONFIG["verify_delay_seconds"])
-            verify_img, verify_mon = grab()
-            if find_again(verify_img, verify_mon) is None:
+            verify_img, verify_win = grab_gta()
+            if verify_img is None or find_again(verify_img, verify_win) is None:
                 print("[loop] AGAIN dismissed after 1 click.")
                 break
 
             print("[loop] AGAIN still visible — retrying with 1 click…")
             focus_gta(); click(sx, sy)
             time.sleep(CONFIG["verify_delay_seconds"])
-            verify_img, verify_mon = grab()
-            if find_again(verify_img, verify_mon) is None:
+            verify_img, verify_win = grab_gta()
+            if verify_img is None or find_again(verify_img, verify_win) is None:
                 print("[loop] AGAIN dismissed after retry.")
                 break
             print("[loop] AGAIN still visible after retry; continuing to poll.")
         if not _running: break
 
-        # Step 7: Wait for horse-select screen to reload, then loop back
+        # Step 7: Record result and print session stats
+        _session_races += 1
+        if payout is not None and payout > amount:
+            _session_profit += payout - amount
+            print(f"[race] WIN  +${payout - amount:,}  (bet ${amount:,}, payout ${payout:,})")
+        else:
+            _session_profit -= amount
+            print(f"[race] LOSS  -${amount:,}")
+        _print_stats()
+
+        # Step 8: Wait for horse-select screen to reload, then loop back
         _sleep(CONFIG["after_again_delay_seconds"])
 
     print("[loop] Stopped.")
 
 
 def start():
-    global _running, _thread
+    global _running, _thread, _session_races, _session_wagered, _session_profit
     if _running:
         print("[hotkey] Already running."); return
+    _session_races   = 0
+    _session_wagered = 0
+    _session_profit  = 0
     _running = True
     _thread = threading.Thread(target=_loop, daemon=True)
     _thread.start()
@@ -949,6 +1176,8 @@ def stop():
     global _running
     _running = False
     print(f"[hotkey] {CONFIG['stop_hotkey'].upper()} – stopping…")
+    if _session_races > 0:
+        _print_stats()
     time.sleep(0.5)
     if CONFIG.get("close_terminal_on_stop", True):
         os._exit(0)
@@ -957,18 +1186,8 @@ def stop():
               f"press {CONFIG['start_hotkey'].upper()} to run again, or Ctrl+C to exit.")
 
 # ---------------------------------------------------------------------------
-# Debug / calibration
+# Debug
 # ---------------------------------------------------------------------------
-
-def coords_finder():
-    ax, ay = get_mouse_pos()
-    with mss.MSS() as sct:
-        mon = sct.monitors[CONFIG["monitor"]]
-    rx, ry = ax - mon["left"], ay - mon["top"]
-    print(f"\n[coords] Absolute: ({ax},{ay})   Monitor-relative: ({rx},{ry})")
-    print(f"[coords] → increase_button_x/y  use: {rx}, {ry}")
-    print(f"[coords] → bet_amount_region     hover corners, compute [x1,y1,w,h]")
-
 
 def debug_ocr():
     img, mon = grab()
@@ -984,32 +1203,254 @@ def debug_ocr():
         print(f"  '{w}'  conf={data['conf'][i]}  pos=({x//scale},{y//scale})")
     cv2.imwrite("debug_ocr_overlay.png", overlay)
 
-    region = CONFIG.get("bet_amount_region")
-    if region:
-        rx, ry, rw, rh = region
-        val = _ocr_digits(img[ry:ry+rh, rx:rx+rw])
-        print(f"\n[debug] bet_amount_region={region}  OCR reads: ${val}")
-    else:
-        print("\n[debug] bet_amount_region not set in config.json")
-
     bx = CONFIG.get("increase_button_x")
     by = CONFIG.get("increase_button_y")
     if bx and by:
-        print(f"[debug] increase_button at ({bx},{by}) [from config]")
-    else:
-        btn = _find_increase_button(img)
-        print(f"[debug] > button OCR: {btn}")
+        print(f"[debug] increase_button at ({bx},{by}) [absolute, from config]")
 
     ax, ay = get_mouse_pos()
-    rx2, ry2 = ax - mon["left"], ay - mon["top"]
-    print(f"[debug] Mouse monitor-relative: ({rx2},{ry2})")
+    print(f"[debug] Mouse absolute: ({ax},{ay})")
     print("[debug] Saved debug_raw.png + debug_ocr_overlay.png")
+
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
+# The 4 coords the EZ wizard captures, in order.
+_EZ_STEPS = [
+    {
+        "key_x": "place_bet_enter_x",
+        "key_y": "place_bet_enter_y",
+        "label": "PLACE BET  (main Inside Track menu — opens horse selection)",
+        "hint":  "On the main Inside Track screen, hover over the PLACE BET button.",
+    },
+    {
+        "key_x": "bet_amount_x",
+        "key_y": "bet_amount_y",
+        "label": "BET AMOUNT  (the number showing your current bet, e.g. $100)",
+        "hint":  "Click any horse so the bet screen opens,\n"
+                 "  then hover over the dollar amount displayed (e.g. $100).",
+    },
+    {
+        "key_x": "increase_button_x",
+        "key_y": "increase_button_y",
+        "label": "BET INCREASE  (the  >  button that raises the bet amount)",
+        "hint":  "On the bet screen, hover over the > (increase) button.",
+    },
+    {
+        "key_x": "place_button_x",
+        "key_y": "place_button_y",
+        "label": "PLACE  (confirm button that submits the bet)",
+        "hint":  "On the bet screen, hover over the PLACE confirm button.",
+    },
+]
+
+
+def _save_coord(key_x, key_y, x, y):
+    """Write a single x/y pair into config.json immediately."""
+    CONFIG[key_x] = x
+    CONFIG[key_y] = y
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    data[key_x] = x
+    data[key_y] = y
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _ez_config_wizard():
+    """
+    Interactive step-by-step coord capture.
+    User hovers over each button and presses F7 to save it, then moves on.
+    """
+    w = 62
+    coords_key = CONFIG.get("coords_hotkey", "f7").upper()
+    print()
+    print("=" * w)
+    print("  EZ CONFIG — step-by-step coordinate setup")
+    print("=" * w)
+    print()
+    print("  You will be guided through 5 steps.")
+    print(f"  For each button: hover your mouse over it in GTA,")
+    print(f"  then press  {coords_key}  to save it and move to the next step.")
+    print()
+    print("  TIP: Alt-Tab between this window and GTA freely.")
+    print("  Press  Ctrl+C  at any time to cancel.")
+    print("=" * w)
+
+    captured = {}
+
+    for step_num, step in enumerate(_EZ_STEPS, 1):
+        kx, ky = step["key_x"], step["key_y"]
+
+        # Skip steps that are already configured
+        if CONFIG.get(kx) is not None and CONFIG.get(ky) is not None:
+            print(f"\n  Step {step_num}/5 — {step['label']}")
+            print(f"  Already set to ({CONFIG[kx]}, {CONFIG[ky]}) — skipping.")
+            captured[kx] = CONFIG[kx]
+            captured[ky] = CONFIG[ky]
+            continue
+
+        print(f"\n  Step {step_num}/5 — {step['label']}")
+        print(f"  {step['hint']}")
+        print(f"  Press  {coords_key}  when your cursor is over it.")
+
+        done = threading.Event()
+        result = {}
+
+        def _capture(kx=kx, ky=ky):
+            ax, ay = get_mouse_pos()
+            result["x"] = ax
+            result["y"] = ay
+            _save_coord(kx, ky, ax, ay)
+            captured[kx] = ax
+            captured[ky] = ay
+            print(f"\n  ✓ Saved  {kx}: {ax},  {ky}: {ay}")
+            done.set()
+
+        keyboard.add_hotkey(CONFIG.get("coords_hotkey", "f7"), _capture)
+        try:
+            while not done.wait(timeout=0.2):
+                pass
+        except KeyboardInterrupt:
+            keyboard.remove_hotkey(CONFIG.get("coords_hotkey", "f7"))
+            print("\n\n  Setup cancelled.")
+            sys.exit(0)
+        keyboard.remove_hotkey(CONFIG.get("coords_hotkey", "f7"))
+
+    # Step 5 — monitor selection
+    print(f"\n  Step 5/5 — Which monitor is GTA V running on?")
+    print()
+    with mss.MSS() as sct:
+        monitors = sct.monitors[1:]   # skip index 0 (virtual combined desktop)
+    for i, m in enumerate(monitors, 1):
+        print(f"    [{i}]  {m['width']}x{m['height']}  at ({m['left']},{m['top']})")
+    print()
+
+    mon_choice = None
+    while mon_choice is None:
+        try:
+            raw = input(f"  Enter monitor number (1–{len(monitors)}): ").strip()
+            val = int(raw)
+            if 1 <= val <= len(monitors):
+                mon_choice = val
+            else:
+                print(f"  Please enter a number between 1 and {len(monitors)}.")
+        except (ValueError, KeyboardInterrupt):
+            print("\n\n  Setup cancelled.")
+            sys.exit(0)
+
+    CONFIG["monitor"] = mon_choice
+    CONFIG["monitor_configured"] = True
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            cfg_data = json.load(f)
+    except Exception:
+        cfg_data = {}
+    cfg_data["monitor"] = mon_choice
+    cfg_data["monitor_configured"] = True
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(cfg_data, f, indent=2)
+    print(f"  ✓ Saved  monitor: {mon_choice}  ({monitors[mon_choice-1]['width']}x{monitors[mon_choice-1]['height']})")
+
+    print()
+    print("=" * w)
+    print("  All done!  Launching auto-bettor…")
+    print("=" * w)
+    print()
+
+
+def _manual_config_wizard():
+    """Print instructions for manual config.json editing and exit."""
+    w = 62
+    print()
+    print("=" * w)
+    print("  MANUAL CONFIG")
+    print("=" * w)
+    print()
+    print("  Edit the following values in config.json:")
+    print()
+    print('    "place_bet_enter_x": <X>,   // PLACE BET button (main screen)')
+    print('    "place_bet_enter_y": <Y>,')
+    print('    "place_button_x":    <X>,   // PLACE confirm button (bet screen)')
+    print('    "place_button_y":    <Y>,')
+    print('    "increase_button_x": <X>,   // > increase button (bet screen)')
+    print('    "increase_button_y": <Y>,')
+    print('    "bet_amount_x":      <X>,   // bet amount number (bet screen)')
+    print('    "bet_amount_y":      <Y>,')
+    print()
+    print("  To find a coordinate: open GTA V, hover your mouse over the")
+    print("  button, note the pixel position from a screen-coordinate tool")
+    print("  (e.g. Windows Snipping Tool, ShareX, or similar), and enter")
+    print("  the X and Y values into config.json.")
+    print()
+    print(f"  config.json is at:")
+    print(f"  {CONFIG_PATH}")
+    print()
+    print("  Save config.json and restart the script when done.")
+    print("=" * w)
+    print()
+    input("  Press Enter to exit…")
+    sys.exit(0)
+
+
+def check_config_wizard():
+    """
+    If any required coordinate is null, show the setup menu and either
+    run EZ Config (guided F7 capture) or print manual instructions.
+    Only shown when something is actually missing — never during normal runs.
+    """
+    needs = (
+        CONFIG.get("place_bet_enter_x") is None or
+        CONFIG.get("place_bet_enter_y") is None or
+        CONFIG.get("place_button_x")    is None or
+        CONFIG.get("place_button_y")    is None or
+        CONFIG.get("increase_button_x") is None or
+        CONFIG.get("increase_button_y") is None or
+        not CONFIG.get("monitor_configured", False)
+    )
+    if not needs:
+        return
+
+    w = 62
+    print()
+    print("=" * w)
+    print("  GTA V Inside Track Auto Bettor — FIRST TIME SETUP")
+    print("=" * w)
+    print()
+    print("  Some required button coordinates are not yet configured.")
+    print("  How would you like to set them up?")
+    print()
+    print("  [1]  MANUAL CONFIG")
+    print("       Edit config.json yourself with a text editor.")
+    print()
+    print("  [2]  EZ CONFIG  (recommended)")
+    print("       Guided setup — hover over each button in GTA and")
+    print(f"       press  {CONFIG.get('coords_hotkey','F7').upper()}  to save it automatically.")
+    print()
+    print("=" * w)
+
+    choice = ""
+    while choice not in ("1", "2"):
+        try:
+            choice = input("  Enter 1 or 2: ").strip()
+        except KeyboardInterrupt:
+            print("\n  Cancelled.")
+            sys.exit(0)
+
+    if choice == "1":
+        _manual_config_wizard()
+    else:
+        _ez_config_wizard()
+
+
 def main():
+    check_config_wizard()
+
     preset, amount = _resolve_preset()
     print("=" * 55)
     print("  GTA V Inside Track Auto Bettor")
@@ -1018,17 +1459,15 @@ def main():
     print(f"  monitor    : {CONFIG['monitor']}")
     print(f"  logging    : {'ON → ' + LOG_PATH if CONFIG['log_all_bets'] else 'OFF'}")
     print()
-    print(f"  {CONFIG['coords_hotkey'].upper():<4} Coord finder great for making configs")
-    print(f"  {CONFIG['debug_hotkey'].upper():<4} Debug OCR dump [REALLY ONLY FOR DEVELOPERS LIKE ME]")
+    print(f"  {CONFIG['debug_hotkey'].upper():<4} Debug OCR dump")
     print(f"  {CONFIG['start_hotkey'].upper():<4} Start betting loop")
     print(f"  {CONFIG['stop_hotkey'].upper():<4} Stop{' and close terminal' if CONFIG.get('close_terminal_on_stop', True) else ''}")
     print("=" * 55)
     print()
 
-    keyboard.add_hotkey(CONFIG["coords_hotkey"], coords_finder)
-    keyboard.add_hotkey(CONFIG["debug_hotkey"],  debug_ocr)
-    keyboard.add_hotkey(CONFIG["start_hotkey"],  start)
-    keyboard.add_hotkey(CONFIG["stop_hotkey"],   stop)
+    keyboard.add_hotkey(CONFIG["debug_hotkey"], debug_ocr)
+    keyboard.add_hotkey(CONFIG["start_hotkey"], start)
+    keyboard.add_hotkey(CONFIG["stop_hotkey"],  stop)
     keyboard.wait()
 
 

@@ -1,154 +1,124 @@
 # GTA-5-Horse-Race-AutoBetter
 
-Automation script for the GTA V horse racing betting interface. Supports both **GTA V Legacy** and **GTA V Enhanced**.
+Automation script for the GTA V Inside Track horse racing interface. Automatically analyzes odds, picks the horse with the highest true win probability, sets the correct bet amount, and repeats — hands free.
 
-Development and testing has primarily been performed on GTA V Enhanced. The script is designed to be highly configurable through `config.json` and can be adapted to different screen resolutions and configurations by changing the required coordinates.
+Supports both **GTA V Legacy** and **GTA V Enhanced**.
 
-## Configuration Video
+## Features
 
-The following video demonstrates the configuration process and explains which values need to be changed in `config.json`.
+- **Odds analysis** — calculates true win probability from displayed odds and always bets on the statistically best horse
+- **Tiered betting** — automatically scales bet size (LOW / MEDIUM / HIGH / MAX) based on how confident the odds are
+- **Time-based bet setting** — holds the increase button for a calibrated duration instead of slow OCR polling
+- **Human-like mouse movement** — gradual bezier cursor movement with random micro-jitter (optional)
+- **Session P&L tracking** — running win/loss total printed after every race
+- **EZ Config wizard** — guided first-time setup, hover each button and press F7 to save
 
-[Watch the configuration video on YouTube](https://www.youtube.com/watch?v=yNOm-2pjr-I)
+## Requirements
 
-## Controls
+- Windows
+- Python 3.10+
+- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract/releases/tag/5.5.3)
 
-| Key   | Function                              |
-| ----- | ------------------------------------- |
-| `F7`  | Display the current mouse coordinates |
-| `F9`  | Start the script                      |
-| `F10` | Stop the script                       |
+Install Python dependencies:
 
-## Configuration
-
-All betting-related settings are controlled through:
-
-```text
-config.json
 ```
-
-The screen coordinates must be configured for the system the script is running on.
-
-### Getting Coordinates
-
-Move the mouse over the required button or interface element and press `F7`.
-
-The script will output information similar to:
-
-```text
-[coords] Absolute: (-789,388)   Monitor-relative: (-789,388)
-[coords] → increase_button_x/y  use: -789, 388
-[coords] → bet_amount_region     hover corners, compute [x1,y1,w,h]
+pip install opencv-python pytesseract mss keyboard numpy
 ```
-
-Use the X and Y values shown after `use:` in the corresponding configuration fields.
-
-For example:
-
-```json
-"bet_amount_x": 1319,
-"bet_amount_y": 518
-```
-
-The values above are examples only. Coordinates will vary depending on the monitor resolution, display scaling, game window position, and other system-specific settings.
-
-## Required Coordinate Settings
-
-The following configuration values need to be set:
-
-```json
-"increase_button_x": 1510,
-"increase_button_y": 508,
-
-"bet_amount_x": 1321,
-"bet_amount_y": 511,
-"bet_amount_crop_width": 100,
-"bet_amount_crop_height": 25,
-
-"place_button_x": 3203,
-"place_button_y": 733
-```
-
-### Configuration Reference
-
-| Setting                  | Description                                     |
-| ------------------------ | ----------------------------------------------- |
-| `increase_button_x`      | X coordinate of the bet increase button         |
-| `increase_button_y`      | Y coordinate of the bet increase button         |
-| `bet_amount_x`           | X coordinate of the bet amount detection region |
-| `bet_amount_y`           | Y coordinate of the bet amount detection region |
-| `bet_amount_crop_width`  | Width of the bet amount detection region        |
-| `bet_amount_crop_height` | Height of the bet amount detection region       |
-| `place_button_x`         | X coordinate of the Place Bet button            |
-| `place_button_y`         | Y coordinate of the Place Bet button            |
-
-Each button coordinate should be obtained using `F7` and entered into the appropriate field in `config.json`.
-
-## Bet Amount Detection
-
-The script uses an OCR region to read the current bet amount.
-
-The relevant configuration is:
-
-```json
-"bet_amount_x": 1321,
-"bet_amount_y": 511,
-"bet_amount_crop_width": 100,
-"bet_amount_crop_height": 25
-```
-
-`bet_amount_x` and `bet_amount_y` define the starting position of the detection region.
-
-`bet_amount_crop_width` and `bet_amount_crop_height` define the size of the region that is captured and processed by OCR.
-
-The detection region must cover the displayed bet amount accurately for OCR to work correctly.
-
-## Installation
-
-### Tesseract OCR
-
-The script requires Tesseract OCR for reading the displayed bet amount.
-
-Tesseract OCR 5.5.3:
-
-https://github.com/tesseract-ocr/tesseract/releases/tag/5.5.3
-
-Install Tesseract before running the script.
 
 ## Setup
 
-1. Download or clone the repository.
-2. Install Tesseract OCR.
-3. Open `config.json`.
-4. Start GTA V.
-5. Position the game as it will be when the script is running.
-6. Use `F7` to obtain the required coordinates.
-7. Enter the coordinates into `config.json`.
-8. Configure the bet amount OCR region.
-9. Save `config.json`.
-10. Press `F9` to start the script.
-11. Press `F10` to stop the script.
+1. Install Tesseract OCR from the link above. Let the installer add it to PATH, or set `tesseract_path` in `config.json`.
+2. Clone or download this repository.
+3. Run the script:
+   ```
+   python main.py
+   ```
+4. On first launch, the **EZ Config wizard** will appear. Follow the 4 steps to configure your button coordinates — no manual editing required.
+
+## EZ Config
+
+The wizard guides you through 4 buttons in order. For each one, switch to GTA V, hover your mouse over the button, then press **F7** to save it.
+
+| Step | Button | Where |
+|------|--------|--------|
+| 1 | PLACE BET | Main Inside Track screen |
+| 2 | Bet amount | The `$100` number on the bet screen |
+| 3 | `>` increase | The increase button on the bet screen |
+| 4 | PLACE | The confirm button on the bet screen |
+
+Coordinates are saved to `config.json` immediately. You can Alt-Tab freely between GTA and the terminal during setup.
+
+## Controls
+
+| Key | Function |
+|-----|----------|
+| `F9` | Start betting loop |
+| `F10` | Stop (and print session stats) |
+| `F8` | Debug OCR dump (developer) |
+
+F7 is only active during the EZ Config wizard.
+
+## Configuration
+
+All settings live in `config.json` next to the script. Key options:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `bet_presets` | `"LOW"` | Fixed preset to use if odds OCR fails (`LOW`/`MEDIUM`/`HIGH`/`MAX`) |
+| `preset_LOW` | `1500` | Dollar amount for LOW tier |
+| `preset_MEDIUM` | `3500` | Dollar amount for MEDIUM tier |
+| `preset_HIGH` | `7500` | Dollar amount for HIGH tier |
+| `preset_MAX` | `10000` | Dollar amount for MAX tier |
+| `bet_presets_threshold_max` | `50` | Win% to use MAX bet |
+| `bet_presets_threshold_high` | `40` | Win% to use HIGH bet |
+| `bet_presets_threshold_medium` | `30` | Win% to use MEDIUM bet |
+| `human_mouse` | `true` | Gradual bezier mouse movement with jitter |
+| `log_all_bets` | `false` | Write every bet to `log.json` |
+| `close_terminal_on_stop` | `true` | Close terminal on F10 |
+
+## How bet amounts work
+
+The script holds the `>` button for a calculated duration based on measured timings:
+
+| Target | Hold time |
+|--------|-----------|
+| $1,500 | 3.5s |
+| $7,500 | 6.5s |
+| $10,000 | 13.5s |
+
+Amounts in between are linearly interpolated. If your machine runs at a different speed, adjust the timings in the `_BET_ANCHORS` table in `main.py`.
+
+## Session stats
+
+After every race the terminal prints:
+
+```
+  ┌─ Session ────────────────────────────────
+  │  Races     : 5
+  │  Wagered   : $12,500
+  │  Net P/L   : +$3,200
+  └──────────────────────────────────────────
+```
+
+Stats reset each time you press F9 to start.
+
+## Reconfiguring
+
+If you move GTA to a different monitor or change your resolution, delete the coordinate values in `config.json` (set them to `null`) and restart the script to re-run the EZ Config wizard.
 
 ## Compatibility
 
-| Version        | Status                                   |
-| -------------- | ---------------------------------------- |
-| GTA V Enhanced | Primary development and testing platform |
-| GTA V Legacy   | Supported                                |
-
-Different resolutions, display scaling settings, and game window positions may require different coordinate and OCR region values.
+| Version | Status |
+|---------|--------|
+| GTA V Enhanced | Primary testing platform |
+| GTA V Legacy | Supported |
 
 ## Troubleshooting
 
-If the script does not interact with the correct buttons, verify the following:
+**Script clicks wrong buttons** — recalibrate coordinates by setting them to `null` in `config.json` and restarting.
 
-* The coordinates in `config.json` match the current screen configuration.
-* GTA V is positioned consistently with the coordinates that were configured.
-* The `bet_amount` OCR region covers the displayed bet amount.
-* Tesseract OCR is installed correctly.
-* Windows display scaling has not changed since the coordinates were configured.
+**Horse not being clicked** — the odds OCR uses a row-band fallback automatically. If it still misses, check that GTA is the active window and not obscured.
 
-Example coordinates included in this README are for demonstration purposes and should not be used as default values.
+**Bet amount is wrong** — the hold timings in `_BET_ANCHORS` are measured on a specific machine. Adjust the seconds values to match your setup.
 
-## Project Status
-
-This project is under active development. GTA V Enhanced is the primary testing environment, while compatibility with GTA V Legacy is also maintained.
+**Tesseract not found** — install from the link above, or set `tesseract_path` in `config.json` to the full path of `tesseract.exe`.
