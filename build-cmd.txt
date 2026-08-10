@@ -1,1 +1,1 @@
-python -m PyInstaller --onefile --console --hidden-import=pytesseract --hidden-import=cv2 --hidden-import=mss --hidden-import=keyboard --hidden-import=numpy main.py
+python -m PyInstaller --onefile --console --hidden-import=pytesseract --hidden-import=cv2 --hidden-import=mss --hidden-import=keyboard --hidden-import=numpy --name EZAutoBet --icon=media/icon.ico main.py

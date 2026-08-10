@@ -929,23 +929,45 @@ def _read_payout(img_bgr):
     Try to OCR a dollar payout amount from the race results screen.
     GTA displays the winnings as a large "$X,XXX" or "$XX,XXX" number.
     Returns the integer payout, or None if nothing reliable is found.
+
+    Strategy: scan for a $ token followed immediately by a number on the
+    same line, or a standalone number that looks like a race payout.
+    We cap candidates at 10x the MAX preset to avoid mistaking the
+    player's bank balance (which can be hundreds of thousands) for the
+    payout.  Inside Track pays out at most ~10x the bet on a long-shot,
+    so anything beyond that is almost certainly the wallet balance.
     """
+    max_plausible = CONFIG.get("preset_MAX", 10000) * 12   # generous ceiling
     data, scale = _ocr_data(img_bgr)
     candidates = []
-    for i, word in enumerate(data["text"]):
+    texts = data["text"]
+    for i, word in enumerate(texts):
         raw = word.strip().replace(",", "").replace("$", "")
         if not raw.isdigit():
             continue
         val = int(raw)
-        if val < 100 or val > 500000:
+        # Must be at least $100 and no more than 12× the MAX preset.
+        # This filters out chip-balance numbers (e.g. $240,000) while
+        # still catching large legitimate payouts like $80,000.
+        if val < 100 or val > max_plausible:
             continue
         conf = int(float(data["conf"][i])) if data["conf"][i] not in ("", "-1") else -1
         if conf < CONFIG["confidence_threshold"]:
             continue
-        candidates.append(val)
+        # Prefer numbers that are preceded by a $ sign on the same line
+        # (GTA prints the payout as "$XX,XXX" in large text).
+        preceded_by_dollar = (
+            i > 0 and "$" in texts[i - 1].strip()
+        )
+        candidates.append((val, preceded_by_dollar))
+
     if not candidates:
         return None
-    return max(candidates)   # largest number on screen = payout
+
+    # Prefer $-prefixed hits; if none, fall back to any candidate.
+    dollar_hits = [v for v, d in candidates if d]
+    pool = dollar_hits if dollar_hits else [v for v, _ in candidates]
+    return max(pool)
 
 
 def find_again(img_bgr, win):
